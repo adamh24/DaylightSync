@@ -418,15 +418,18 @@ function render(s) {
 
 function buildZones(zones) {
   const list = document.getElementById('zones-list');
-  list.innerHTML = Object.entries(zones).map(([name, on]) => `
+  list.innerHTML = Object.entries(zones).map(([name, zone]) => {
+    const connected = (zone && typeof zone === 'object') ? Boolean(zone.connected ?? true) : Boolean(zone);
+    return `
     <div class="zone-row">
       <span class="zone-name">${name.replace(/_/g,' ')}</span>
       <label class="toggle">
-        <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleZone('${name}',this.checked)"/>
+        <input type="checkbox" ${connected ? 'checked' : ''} onchange="toggleZoneConnection('${name}',this.checked)"/>
         <div class="toggle-track"></div>
         <div class="toggle-thumb"></div>
       </label>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function escHtml(s) {
@@ -451,8 +454,8 @@ function sliderMove(v) {
   document.getElementById('slider-val').textContent = v + '%';
 }
 
-async function toggleZone(name, enabled) {
-  await fetch(`/zone/${name}?enabled=${enabled}`, { method: 'POST' });
+async function toggleZoneConnection(name, connected) {
+  await fetch(`/sim/zone/${name}/connection?connected=${connected}`, { method: 'POST' });
 }
 
 function speedMove(v) {

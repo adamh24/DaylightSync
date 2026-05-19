@@ -36,9 +36,12 @@ state = {
     "brightness": 50,
     "mode": "auto",
     "zones": {
-        "bar_counter": True,
-        "seating": True,
-        "accent": True,
+        "bar_counter": {"connected": True, "enabled": True, "brightness": 70},
+        "seating": {"connected": True, "enabled": True, "brightness": 60},
+        "accent": {"connected": True, "enabled": True, "brightness": 45},
+        "window": {"connected": True, "enabled": True, "brightness": 55},
+        "entry": {"connected": True, "enabled": True, "brightness": 50},
+        "back_wall": {"connected": True, "enabled": True, "brightness": 40},
     },
     "sim_speed": 60,          # 1 sim-second = how many real seconds to skip
     "sim_time_of_day": 8.0,   # hours (0-24)
@@ -77,14 +80,38 @@ def lux_to_brightness(lux: float) -> int:
 
 
 def _active_zones() -> list[str]:
-    return [z for z, on in state["zones"].items() if on]
+    active = []
+    for name, zone in state["zones"].items():
+        if isinstance(zone, dict):
+            if zone.get("enabled", False):
+                active.append(name)
+        elif zone:
+            # Backward compatibility for older boolean state shape.
+            active.append(name)
+    return active
 
 # ── Simulated light control (replaces real Zigbee/MQTT publish) ───────────────
 
 async def set_lights(brightness: int):
-    zones = _active_zones()
-    if zones:
-        _log(f"[lights] Set {', '.join(zones)} → {brightness}%")
+    zone_levels = []
+    for name, zone in state["zones"].items():
+        if isinstance(zone, dict):
+            enabled = bool(zone.get("enabled", False))
+            zone_brightness = int(zone.get("brightness", 0))
+        else:
+            # Backward compatibility for older boolean state shape.
+            enabled = bool(zone)
+            zone_brightness = brightness
+
+        if not enabled:
+            continue
+
+        # Zone brightness acts as a trim/multiplier of the current global level.
+        effective = round(max(0, min(brightness, 100)) * max(0, min(zone_brightness, 100)) / 100)
+        zone_levels.append(f"{name}:{effective}%")
+
+    if zone_levels:
+        _log(f"[lights] Global {brightness}% | " + ", ".join(zone_levels))
     else:
         _log("[lights] All zones disabled – nothing to set")
 
@@ -137,14 +164,59 @@ async def manual_override(brightness: int):
 async def set_auto():
     state["mode"] = "auto"
     _log("[api] Switched to auto mode")
+    await set_lights(state["brightness"])
     return {"ok": True}
 
 
 @app.post("/zone/{name}")
 async def toggle_zone(name: str, enabled: bool):
+    """UI power toggle: direct on/off control for a zone."""
     if name in state["zones"]:
-        state["zones"][name] = enabled
-        _log(f"[api] Zone '{name}' → {'on' if enabled else 'off'}")
+        zone = state["zones"][name]
+        if isinstance(zone, dict):
+            zone["enabled"] = enabled
+        else:
+            state["zones"][name] = {
+                "connected": True,
+                "enabled": enabled,
+                "brightness": state["brightness"],
+            }
+        _log(f"[api] Zone '{name}' power set → {'on' if enabled else 'off'}")
+        await set_lights(state["brightness"])
+    return state["zones"]
+
+
+@app.post("/zone/{name}/brightness")
+async def set_zone_brightness(name: str, brightness: int):
+    if name in state["zones"]:
+        zone = state["zones"][name]
+        if isinstance(zone, dict):
+            zone["brightness"] = max(0, min(brightness, 100))
+        else:
+            state["zones"][name] = {
+                "connected": True,
+                "enabled": bool(zone),
+                "brightness": max(0, min(brightness, 100)),
+            }
+        _log(f"[api] Zone '{name}' brightness → {state['zones'][name]['brightness']}%")
+        await set_lights(state["brightness"])
+    return state["zones"]
+
+
+@app.post("/sim/zone/{name}/connection")
+async def set_sim_zone_connection(name: str, connected: bool):
+    """Simulation-only control: update zone connection status (no power/output side effects)."""
+    if name in state["zones"]:
+        zone = state["zones"][name]
+        if isinstance(zone, dict):
+            zone["connected"] = connected
+        else:
+            state["zones"][name] = {
+                "connected": connected,
+                "enabled": bool(zone),
+                "brightness": state["brightness"],
+            }
+        _log(f"[sim] Zone '{name}' connection → {'connected' if connected else 'disconnected'}")
     return state["zones"]
 
 
